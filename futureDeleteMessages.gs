@@ -5,7 +5,7 @@
  * TODO - next page token to be handled if the number of messages is too many. 
  * What would happen if a message thread ends up getting a next page token? Will it delete partial thread and rest will linger?
  * 
- * Note: Please use utility funcetion at end to get label names.
+ * 
  */
 function deleteTaggedMessages() {
 
