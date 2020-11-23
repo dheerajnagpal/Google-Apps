@@ -5,17 +5,17 @@
  * TODO - next page token to be handled if the number of messages is too many. 
  * What would happen if a message thread ends up getting a next page token? Will it delete partial thread and rest will linger?
  * 
- * 
+ * Note: Please use utility funcetion at end to get label names.
  */
 function deleteTaggedMessages() {
 
-  const shortTermLabel = { 'q': 'label:7DayDelete' };
-  const shprtTermDays = 7;
-  const mediumTermLabel = { 'q': 'label:30DayDelete' };
+  const shortTermLabel = { 'q': 'label:7DayDelete older_than:7d' };
+  const shortTermDays = 7;
+  const mediumTermLabel = { 'q': 'label:30DayDelete older_than:30d' };
   const mediumTermDays = 30;
 
   // Add more rows if more label and day combinations are needed
-    futureDeleteMessages('me', shortTermLabel, shprtTermDays);
+    futureDeleteMessages('me', shortTermLabel, shortTermDays);
     futureDeleteMessages('me', mediumTermLabel, mediumTermDays);
 
 }
@@ -34,7 +34,7 @@ function futureDeleteMessages(user, query, numberOfDays) {
     let threads = getThreads(user, query);
     let threadID = null;
     let messageList = null;
-    // Logger.log(threads);
+    Logger.log("Total threads in search are: " + threads.resultSizeEstimate);
     for (let i = 0; i < threads.resultSizeEstimate; i++) {
         threadID = threads.threads[i].id;
         // For each thread, get the list of messages
@@ -100,7 +100,7 @@ function deleteMessages(user, messageList, numberOfDays) {
     previousDate.setDate(currentDate.getDate() - numberOfDays);
     // Logger.log('Purge Date is ' + previousDate);
     // Logger.log('inside deleteMessage. messageList is ' + JSON.stringify(messageList));
-
+    Logger.log("Total number of messages being reviewed are: " + messageList.messages.length);
     for (let i = 0; i < messageList.messages.length; i++) {
         let date = new Date();
         date.setTime(messageList.messages[i].messageDate);
@@ -114,3 +114,6 @@ function deleteMessages(user, messageList, numberOfDays) {
         }
     }
 }
+
+
+
