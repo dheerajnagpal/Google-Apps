@@ -1,103 +1,135 @@
 /**
- * Primary function for the script. Delete all responses and just keep an original mail in the thread that matches a given label.
- * Change the label names to match your own setting 
+ * Primary function for the script. 
+ * Deletes all replies (messages at index 1+) in a thread, keeping only the original (index 0).
  *
- * @author - dnagpal
- * TODO - next page token to be handled if the number of messages is too many. 
- * What would happen if a message thread ends up getting a next page token? Will it delete partial thread and rest will linger?
- * 
- * Note: Please use utility function getLables to get all label names in your account.
+ * @author - dnagpal (Refactored for Pagination and Batching)
  */
 function purgeTaggedReplies() {
 
+  // 'newer_than:30d' effectively targets active threads. 
+  // Adjust logic if you want to target old threads instead.
+  const purgeQuery = { 'q': 'label:PurgeReplies newer_than:30d' };
 
-  const purgeThirtyDate = { 'q': 'label:PurgeReplies newer_than:30d' };
-
-  // enable the method for the duration for which to purge responses. 
-    futurePurgeReplies('me', purgeThirtyDate);
-
+  futurePurgeReplies('me', purgeQuery);
 }
 
 
 /**
- * Fetches the threads tagged to a label, then delete messages that are older than the days parameter. 
+ * Fetches threads matching the query, identifies replies (non-first messages), 
+ * and batch deletes them. Handles Pagination.
  *
- * @param  {String} user  -  User's email address. The special value 'me' can be used to indicate the authenticated user.
+ * @param  {String} user  -  User's email address.
  * @param  {Object} query - String used to filter the Messages listed.
- * @param  {Number} numberOfDays - Number of days the message has to be older than today to be deleted..
  */
 function futurePurgeReplies(user, query) {
+    let pageToken;
+    let totalDeleted = 0;
 
-    // Get the threads matching the query.  
-    let threads = getThreads(user, query);
-    let threadID = null;
-    let messageList = null;
-    Logger.log("Total threads in search are: " + threads.resultSizeEstimate);
-    for (let i = 0; i < threads.resultSizeEstimate; i++) {
-        threadID = threads.threads[i].id;
-        // For each thread, get the list of messages
-        messageList = getMessages(user, threadID);
-       Logger.log('Complete Message List is ' + JSON.stringify(messageList));
-        // For the message list, delete the replies.
-        deleteNonFirstMessages(user, messageList);
+    // PAGE LOOP: Ensure we process ALL threads, not just the first 100
+    do {
+        try {
+            let threadList = Gmail.Users.Threads.list('me', {
+                q: query.q,
+                pageToken: pageToken
+            });
 
-    }
+            if (threadList.threads && threadList.threads.length > 0) {
+                Logger.log(`Processing page with ${threadList.threads.length} threads...`);
+                
+                let batchIdsToDelete = [];
+
+                // THREAD LOOP
+                for (let i = 0; i < threadList.threads.length; i++) {
+                    try {
+                        let threadID = threadList.threads[i].id;
+                        let messageList = getMessages(user, threadID);
+                        
+                        // Collect IDs of replies (skipping the first message)
+                        let ids = getReplyIdsToDelete(messageList);
+                        if (ids.length > 0) {
+                            batchIdsToDelete = batchIdsToDelete.concat(ids);
+                        }
+                    } catch (e) {
+                        Logger.log("ERROR processing Thread ID " + threadList.threads[i].id + ": " + e.message);
+                    }
+                }
+
+                // BATCH DELETE
+                if (batchIdsToDelete.length > 0) {
+                    batchTrashMessages(user, batchIdsToDelete);
+                    totalDeleted += batchIdsToDelete.length;
+                }
+            }
+
+            pageToken = threadList.nextPageToken;
+
+        } catch (e) {
+            Logger.log("CRITICAL ERROR in Page Loop: " + e.message);
+            break;
+        }
+        
+    } while (pageToken);
+
+    Logger.log(`Completed. Total replies moved to trash: ${totalDeleted}`);
 }
 
 /**
- * Fetches the threads matching a given query.  
- *
- * @param  {String} user  -  User's email address. The special value 'me' can be used to indicate the authenticated user.
- * @param  {Object} query - String used to filter the Messages listed.
- * @return {Object} threads - Object with list of threads. 
- */
-function getThreads(user, query) {
-    let threads = Gmail.Users.Threads.list('me', query);
-    return threads;
-}
-
-/**
- * Fetches the list of messages matching a given thread ID.  
- *
- * @param  {String} user  -  User's email address. The special value 'me' can be used to indicate the authenticated user.
- * @param {String} threadID - Thread ID of the thread. 
- * @return {Object} messageList - Object with list of messages {ID and Message Date}
+ * Fetches the list of messages matching a given thread ID.
+ * Gmail API returns messages in chronological order by default.
  */
 function getMessages(user, threadID) {
     let thread = Gmail.Users.Threads.get(user, threadID);
-    let messageList = {
-        'messages': [
-            { 'id': null, 'messageDate': null }
-        ]
-    };
+    let messageList = { 'messages': [] };
+    
+    if (!thread.messages) return messageList;
+
     for (let j = 0; j < thread.messages.length; j++) {
-
-        // Logger.log('Thread ID is ' + thread.messages[j].id);
-        messageList.messages[j] = { 'id': null, 'messageDate': null };
-
-        messageList.messages[j].id = thread.messages[j].id;
-        messageList.messages[j].messageDate = thread.messages[j].internalDate;
-        // Logger.log(thread.messages[j].internalDate);
+        messageList.messages.push({
+            'id': thread.messages[j].id,
+            'messageDate': thread.messages[j].internalDate
+        });
     }
-
     return messageList;
 }
 
 /**
- * Deletes the list of messages in a list except the first one. 
- *
- * @param  {String} user  -  User's email address. The special value 'me' can be used to indicate the authenticated user.
- * @return {Object} messageList - Object with list of messages {ID and Message Date}
+ * Identifies all messages except the first one (Index 0).
+ * Assumes Index 0 is the original email.
+ * * @param {Object} messageList
+ * @return {Array} ids - List of IDs to delete
  */
-function deleteNonFirstMessages(user, messageList) {
-
-    Logger.log("Total number of messages being reviewed are: " + messageList.messages.length);
-    //From second item onwards, delete the messages.
-    for (let i = 1; i < messageList.messages.length; i++) {
-        Logger.log(messageList.messages[i].id + ' will be deleted');
-        Gmail.Users.Messages.trash(user,messageList.messages[i].id);
+function getReplyIdsToDelete(messageList) {
+    let idsToDelete = [];
+    
+    // Safety check: If there is 1 or 0 messages, there are no replies to delete.
+    if (messageList.messages.length <= 1) {
+        return idsToDelete;
     }
+
+    // Start loop at 1 to SKIP the original message (Index 0)
+    for (let i = 1; i < messageList.messages.length; i++) {
+        idsToDelete.push(messageList.messages[i].id);
+    }
+    
+    return idsToDelete;
 }
 
-
-
+/**
+ * Trashes messages in batches of 1000 using batchModify.
+ */
+function batchTrashMessages(user, allIds) {
+    const BATCH_SIZE = 1000;
+    
+    for (let i = 0; i < allIds.length; i += BATCH_SIZE) {
+        let batch = allIds.slice(i, i + BATCH_SIZE);
+        try {
+            Logger.log(`Batch trashing ${batch.length} replies...`);
+            Gmail.Users.Messages.batchModify({
+                'ids': batch,
+                'addLabelIds': ['TRASH'] 
+            }, user);
+        } catch (e) {
+            Logger.log("ERROR in batch trash: " + e.message);
+        }
+    }
+}
